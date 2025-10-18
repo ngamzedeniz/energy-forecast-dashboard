@@ -1,6 +1,6 @@
-Flask
 fastapi
-uvicorn
+uvicorn[standard]
+jinja2
 requests
 pandas
 numpy
@@ -8,4 +8,4 @@ scikit-learn
 plotly
 yfinance
 gunicorn
-jinja2
+python-multipart
