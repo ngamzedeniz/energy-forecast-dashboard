@@ -1,28 +1,19 @@
+import os
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import os
 import pandas as pd
-from model_utils import forecast_energy, get_weather_insight
+from datetime import datetime, timedelta
+
+from model_utils import (
+    CITIES, get_weather_data, get_elexon_data,
+    train_stacking_model, predict_with_stacking, get_meteorological_insight
+)
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-
-# UK + Scotland critical cities (wind & solar)
-CITY_COORDINATES = {
-    "London": {"lat":51.5074,"lon":-0.1278},
-    "Manchester":{"lat":53.4808,"lon":-2.2426},
-    "Birmingham":{"lat":52.4862,"lon":-1.8904},
-    "Leeds":{"lat":53.8008,"lon":-1.5491},
-    "Glasgow":{"lat":55.8642,"lon":-4.2518},
-    "Edinburgh":{"lat":55.9533,"lon":-3.1883},
-    "Aberdeen":{"lat":57.1497,"lon":-2.0943},
-    "Dundee":{"lat":56.4620,"lon":-2.9707},
-    "Inverness":{"lat":57.4778,"lon":-4.2247},
-    "Belfast":{"lat":54.5973,"lon":-5.9301}
-}
-CITIES = list(CITY_COORDINATES.keys())
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -32,23 +23,45 @@ async def home(request: Request):
 
 @app.post("/predict", response_class=HTMLResponse)
 async def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
-    if city not in CITY_COORDINATES:
-        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message":"Invalid city selected."})
-    
-    df_weather, avg_wind, max_wind, interpretation = get_weather_insight(CITY_COORDINATES[city])
-    predicted_price, predicted_volume = forecast_energy(ticker, df_weather)
+    ticker = ticker.upper()
+    # --- Weather Data ---
+    df_weather, error = get_weather_data(city)
+    if error:
+        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": error})
 
-    return templates.TemplateResponse("result.html", {
-        "request": request,
-        "ticker": ticker,
-        "city": city,
-        "predicted_price": f"{predicted_price:.2f}" if predicted_price else "N/A",
-        "predicted_volume": f"{predicted_volume:.0f}" if predicted_volume else "N/A",
-        "avg_wind": avg_wind,
-        "max_wind": max_wind,
-        "interpretation": interpretation,
-        "weather_table": df_weather.to_dict('records') if df_weather is not None else []
-    })
+    # --- Meteorological Insight ---
+    insight = get_meteorological_insight(df_weather)
+
+    # --- Elexon Data ---
+    df_energy, error = get_elexon_data(ticker)
+    if error or df_energy is None or df_energy.empty:
+        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": error})
+
+    # --- Features for Model ---
+    feature_cols = ["Temperature", "Wind_Speed", "Cloud_Cover", "Precipitation"]
+    target_price_col = "Price"  # Elexon dataset örnek
+    target_volume_col = "Volume"
+
+    # Train stacking models
+    price_model = train_stacking_model(df_energy, target_price_col, feature_cols)
+    volume_model = train_stacking_model(df_energy, target_volume_col, feature_cols)
+
+    # Predict next period
+    predicted_price = predict_with_stacking(price_model, df_weather, feature_cols)[-1]
+    predicted_volume = predict_with_stacking(volume_model, df_weather, feature_cols)[-1]
+
+    return templates.TemplateResponse(
+        "result.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "city": city,
+            "predicted_price": f"{predicted_price:,.2f}",
+            "predicted_volume": f"{int(predicted_volume):,}",
+            "insight": insight,
+            "weather_data": df_weather.to_dict(orient="records")
+        }
+    )
 
 
 if __name__ == "__main__":
