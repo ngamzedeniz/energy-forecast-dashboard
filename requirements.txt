@@ -1,4 +1,4 @@
-# Upgrade pip and build tools
+# Upgrade pip / setuptools / wheel
 pip>=25.2
 setuptools>=80.9.0
 wheel>=0.45.1
@@ -6,7 +6,7 @@ wheel>=0.45.1
 # Core scientific / ML packages
 numpy==2.3.4
 pandas==2.3.3
-scipy==1.11.1
+scipy==1.16.2
 scikit-learn==1.3.1
 
 # Dashboard / plotting
@@ -19,10 +19,10 @@ requests==2.31.0
 yfinance==0.2.43
 python-dotenv==1.0.1
 
-# Optional: Excel / CSV
+# Excel / CSV
 openpyxl==3.1.3
 xlrd==2.0.1
 
-# Optional: Parsing
+# Parsing
 beautifulsoup4==4.12.2
 lxml==4.9.3
