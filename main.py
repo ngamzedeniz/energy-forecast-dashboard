@@ -1,69 +1,63 @@
 import os
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import pandas as pd
-from datetime import datetime, timedelta
-
 from model_utils import (
-    CITIES, get_weather_data, get_elexon_data,
-    train_stacking_model, predict_with_stacking, get_meteorological_insight
+    get_weather_data,
+    get_elexon_data,
+    train_stacking_model,
+    predict_with_stacking,
+    get_meteorological_insight,
 )
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+
+# --- Dizinler ---
+if not os.path.exists("static"):
+    os.makedirs("static")
+if not os.path.exists("templates"):
+    os.makedirs("templates")
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
-
+# --- Ana Sayfa ---
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES})
+    return templates.TemplateResponse("index.html", {"request": request, "cities": list(get_weather_data.__defaults__[0])})
 
-
+# --- Form Submit / Predict ---
 @app.post("/predict", response_class=HTMLResponse)
-async def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
-    ticker = ticker.upper()
-    # --- Weather Data ---
-    df_weather, error = get_weather_data(city)
-    if error:
-        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": error})
+async def predict(request: Request, city: str = Form(...), ticker: str = Form(...)):
+    # Weather Data
+    weather_df, weather_error = get_weather_data(city)
+    if weather_error:
+        return HTMLResponse(f"Weather API error: {weather_error}", status_code=500)
 
-    # --- Meteorological Insight ---
-    insight = get_meteorological_insight(df_weather)
+    # Elexon Data
+    elexon_df, elexon_error = get_elexon_data(ticker)
+    if elexon_error:
+        return HTMLResponse(f"Elexon API error: {elexon_error}", status_code=500)
 
-    # --- Elexon Data ---
-    df_energy, error = get_elexon_data(ticker)
-    if error or df_energy is None or df_energy.empty:
-        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": error})
+    # Basit örnek feature/target sütunları
+    feature_cols = ["Temperature", "Wind_Speed", "Cloud_Cover", "Temp_Anomaly"]
+    target_col = "Precipitation"  # örnek
+    model = train_stacking_model(weather_df, target_col, feature_cols)
+    predictions = predict_with_stacking(model, weather_df, feature_cols)
 
-    # --- Features for Model ---
-    feature_cols = ["Temperature", "Wind_Speed", "Cloud_Cover", "Precipitation"]
-    target_price_col = "Price"  # Elexon dataset örnek
-    target_volume_col = "Volume"
-
-    # Train stacking models
-    price_model = train_stacking_model(df_energy, target_price_col, feature_cols)
-    volume_model = train_stacking_model(df_energy, target_volume_col, feature_cols)
-
-    # Predict next period
-    predicted_price = predict_with_stacking(price_model, df_weather, feature_cols)[-1]
-    predicted_volume = predict_with_stacking(volume_model, df_weather, feature_cols)[-1]
+    insight = get_meteorological_insight(weather_df)
 
     return templates.TemplateResponse(
         "result.html",
         {
             "request": request,
-            "ticker": ticker,
             "city": city,
-            "predicted_price": f"{predicted_price:,.2f}",
-            "predicted_volume": f"{int(predicted_volume):,}",
-            "insight": insight,
-            "weather_data": df_weather.to_dict(orient="records")
+            "ticker": ticker,
+            "predictions": predictions.tolist(),
+            "insight": insight
         }
     )
 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+# --- Uvicorn Start Command için ---
+# Render start command: uvicorn main:app --host 0.0.0.0 --port $PORT
