@@ -1,10 +1,11 @@
+Flask
 fastapi
-uvicorn[standard]
+uvicorn
+requests
 pandas
 numpy
 scikit-learn
 plotly
-requests
 yfinance
-python-dotenv
 gunicorn
+jinja2
