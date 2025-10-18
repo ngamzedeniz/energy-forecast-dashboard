@@ -1,35 +1,28 @@
-# Upgrade pip and setuptools first
+# Upgrade pip and build tools
 pip>=25.2
-setuptools>=68.0.0
-wheel>=0.41.0
+setuptools>=80.9.0
+wheel>=0.45.1
 
-# Core scientific packages
-numpy==1.26.2
-pandas==2.1.1
+# Core scientific / ML packages
+numpy==2.3.4
+pandas==2.3.4
 scipy==1.11.1
+scikit-learn==1.3.1
 
-# Plotting / Dashboard
+# Dashboard / plotting
 plotly==6.1.0
 dash==2.13.0
 dash-bootstrap-components==1.5.1
 
-# Data fetching / APIs
+# APIs / fetching data
 requests==2.31.0
 yfinance==0.2.43
 python-dotenv==1.0.1
 
-# Optional: for Excel or CSV handling
+# Optional: Excel / CSV
 openpyxl==3.1.3
 xlrd==2.0.1
 
-# Optional: for scheduling / background tasks
-apscheduler==3.10.1
-
-# Optional: for JSON / web parsing
+# Optional: Parsing
 beautifulsoup4==4.12.2
 lxml==4.9.3
-
-# Optional: machine learning
-scikit-learn==1.3.1
-tensorflow==2.15.0
-keras==2.15.0
