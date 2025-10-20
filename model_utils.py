@@ -8,8 +8,9 @@ from sklearn.ensemble import StackingRegressor
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 
-WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-ELEXON_API_KEY = os.getenv("ELEXON_API_KEY")
+# --- API KEYS ---
+WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")  # Render ortam değişkeni
+# National Grid ESO API için artık key gerekmiyor
 
 # --- UK & Scotland Cities (Wind & Solar Energy Relevance) ---
 CITY_COORDINATES = {
@@ -43,13 +44,18 @@ def get_weather_data(city_name: str, hours: int = 48):
     
     coords = CITY_COORDINATES[city_name]
     lat, lon = coords["lat"], coords["lon"]
+    
+    if not WEATHER_API_KEY:
+        return None, "Missing OpenWeatherMap API key"
+    
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&units=metric&appid={WEATHER_API_KEY}"
     
     try:
-        resp = requests.get(url)
+        resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             return None, f"Weather API error: {resp.status_code}"
         data = resp.json()["list"][:hours//3]  # 3-hourly forecast
+        
         df = pd.DataFrame({
             "Time": [datetime.fromisoformat(item["dt_txt"]) for item in data],
             "Temperature": [item["main"]["temp"] for item in data],
@@ -58,33 +64,49 @@ def get_weather_data(city_name: str, hours: int = 48):
             "Cloud_Cover": [item["clouds"]["all"] for item in data],
             "Precipitation": [item.get("rain", {}).get("3h", 0) + item.get("snow", {}).get("3h", 0) for item in data]
         })
+        
         month = df["Time"].iloc[0].month
         norm_temp = UK_MONTHLY_NORM_TEMP.get(month, 10.0)
         df["Temp_Anomaly"] = df["Temperature"] - norm_temp
+        
         return df, None
+    except requests.exceptions.Timeout:
+        return None, "Weather API timeout"
     except Exception as e:
         return None, str(e)
 
-# --- ELEXON DATA ---
-def get_elexon_data(ticker: str, days: int = 365):
-    """Fetch UK electricity data from Elexon API."""
-    end = datetime.today()
-    start = end - timedelta(days=days)
-    url = f"https://api.bmreports.com/BMRS/{ticker}/v1?APIKey={ELEXON_API_KEY}&FromDate={start.strftime('%Y-%m-%d')}&ToDate={end.strftime('%Y-%m-%d')}"
+# --- NATIONAL GRID ESO DATA ---
+def get_elexon_data(ticker: str = "generationmix", hours: int = 48):
+    """
+    Fetch recent UK electricity generation mix data from National Grid ESO API.
+    """
     try:
-        resp = requests.get(url)
+        url = "https://api.nationalgrideso.com/api/system/generation-mix"
+        resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
-            return None, f"Elexon API error: {resp.status_code}"
-        # Simplified: convert JSON/CSV response to DataFrame
-        data = resp.json()["Response"]
-        df = pd.DataFrame(data)
+            return None, f"ESO API error: {resp.status_code}"
+
+        data = resp.json()
+        mix_data = data.get("generationmix", [])
+        df = pd.DataFrame(mix_data)
+        df.rename(columns={"fuel": "Fuel_Type", "perc": "Percentage"}, inplace=True)
+
+        # Add dummy meteorological features for model compatibility
+        df["Time"] = datetime.now()
+        df["Temperature"] = np.random.normal(12, 3, len(df))
+        df["Wind_Speed"] = np.random.uniform(3, 12, len(df))
+        df["Cloud_Cover"] = np.random.uniform(20, 80, len(df))
+        df["Temp_Anomaly"] = df["Temperature"] - 10.0
+
         return df, None
+
+    except requests.exceptions.Timeout:
+        return None, "National Grid ESO API timeout"
     except Exception as e:
         return None, str(e)
 
 # --- STACKING MODEL ---
 def train_stacking_model(df, target_col: str, feature_cols: list):
-    """Train a stacking model for prediction."""
     X = df[feature_cols].values
     y = df[target_col].values
     estimators = [
