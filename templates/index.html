@@ -11,7 +11,11 @@
         <p>Example Symbols: <strong>SSE.L</strong> (Energy), <strong>UKW.L</strong> (Wind)</p>
 
         {% if error_message %}
-            <div class="alert alert-danger">{{ error_message }}</div>
+            <div class="alert alert-info">{{ error_message }}</div>
+        {% endif %}
+
+        {% if insight %}
+            <div class="alert alert-success"><strong>Insight:</strong> {{ insight }}</div>
         {% endif %}
 
         <form method="post" action="/predict">
