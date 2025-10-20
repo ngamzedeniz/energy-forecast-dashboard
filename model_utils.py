@@ -8,7 +8,7 @@ from sklearn.ensemble import StackingRegressor
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 
-WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
+WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 ELEXON_API_KEY = os.getenv("ELEXON_API_KEY")
 
 # --- UK & Scotland Cities (Wind & Solar Energy Relevance) ---
