@@ -1,63 +1,51 @@
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-from typing import Optional
-from model_utils import CITIES, get_weather_data, get_model_predictions, get_meteorological_insight
+from model_utils import CITIES, get_land_observation, generate_insight
+import plotly.express as px
+import pandas as pd
+import numpy as np
 
-app = FastAPI(title="UK & Scotland Energy Forecast API")
+app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
-# --- HTML sayfa ---
 @app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES})
+def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": None})
 
-# --- HTML formdan tahmin ---
 @app.post("/predict", response_class=HTMLResponse)
-async def predict_form(
-    request: Request,
-    city: str = Form(...),
-    target: str = Form("Wind_Speed")
-):
-    df_weather, err = await get_weather_data(city)
-    if err:
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "cities": CITIES, "error_message": f"⚠️ Weather API error: {err}"}
-        )
+def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
+    try:
+        obs_df = get_land_observation(city)
+        insight = generate_insight(obs_df)
 
-    preds = await get_model_predictions(df_weather, target_col=target)
-    insight = get_meteorological_insight(df_weather)
+        # Dummy predicted price/volume
+        predicted_price = round(100 + np.random.randn()*5, 2)
+        predicted_volume = int(1000 + np.random.randn()*50)
 
-    return templates.TemplateResponse(
-        "result.html",
-        {
+        # Plotly charts
+        temp_plot = px.line(obs_df, x="datetime", y="temperature", title="Temperature Forecast (°C)").to_html(full_html=False)
+        anomaly_plot = px.line(obs_df, x="datetime", y="temperature_anomaly", title="Temperature Anomaly (°C)").to_html(full_html=False)
+        wind_plot = px.line(obs_df, x="datetime", y="wind_speed", title="Wind Speed (m/s)").to_html(full_html=False)
+        price_plot = px.line(x=list(range(10)), y=100+np.random.randn(10).cumsum(), title="Price Trend").to_html(full_html=False)
+        volume_plot = px.line(x=list(range(10)), y=1000+np.random.randn(10).cumsum(), title="Volume Trend").to_html(full_html=False)
+
+        return templates.TemplateResponse("result.html", {
             "request": request,
+            "ticker": ticker,
             "city": city,
-            "target": target,
-            "weather_data": df_weather.to_dict(orient="records"),
-            "predictions": preds.tolist(),
-            "insight": insight["interpretation"]
-        }
-    )
-
-# --- JSON API ---
-class PredictRequest(BaseModel):
-    city: str
-    target: Optional[str] = "Wind_Speed"
-
-@app.post("/api/predict")
-async def predict_api(request: PredictRequest):
-    df_weather, err = await get_weather_data(request.city)
-    if err:
-        raise HTTPException(status_code=400, detail=f"Weather API error: {err}")
-
-    preds = await get_model_predictions(df_weather, target_col=request.target)
-    insight = get_meteorological_insight(df_weather)
-    return {
-        "city": request.city,
-        "target": request.target,
-        "predictions": preds.tolist(),
-        "insight": insight
-    }
+            "predicted_price": predicted_price,
+            "predicted_volume": predicted_volume,
+            "avg_wind_speed": insight["avg_wind"],
+            "max_wind_text": insight["max_wind"],
+            "norm_temp": insight["norm_temp"],
+            "detailed_table_data": insight["table"],
+            "temp_plot": temp_plot,
+            "anomaly_plot": anomaly_plot,
+            "wind_plot": wind_plot,
+            "price_plot": price_plot,
+            "volume_plot": volume_plot
+        })
+    except Exception as e:
+        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": str(e)})
