@@ -1,16 +1,15 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
-from datetime import datetime, timedelta
+import httpx
+from datetime import datetime
 from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import StackingRegressor
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, StackingRegressor
 
 # --- API KEYS ---
-WEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")  # Render ortam değişkeni
-# National Grid ESO API için artık key gerekmiyor
+OBSERVATION_API_KEY = os.getenv("METOFFICE_OBSERVATION_API_KEY")
+MODEL_API_KEY = os.getenv("METOFFICE_MODEL_API_KEY")
 
 # --- UK & Scotland Cities (Wind & Solar Energy Relevance) ---
 CITY_COORDINATES = {
@@ -22,11 +21,7 @@ CITY_COORDINATES = {
     "Edinburgh": {"lat": 55.9533, "lon": -3.1883},
     "Aberdeen": {"lat": 57.1497, "lon": -2.0943},
     "Dundee": {"lat": 56.4620, "lon": -2.9707},
-    "Inverness": {"lat": 57.4778, "lon": -4.2247},
-    "Newcastle": {"lat": 54.9783, "lon": -1.6178},
-    "Liverpool": {"lat": 53.4084, "lon": -2.9916},
-    "Sheffield": {"lat": 53.3829, "lon": -1.4659},
-    "Bristol": {"lat": 51.4545, "lon": -2.5879}
+    "Inverness": {"lat": 57.4778, "lon": -4.2247}
 }
 CITIES = list(CITY_COORDINATES.keys())
 
@@ -37,78 +32,50 @@ UK_MONTHLY_NORM_TEMP = {
 }
 
 # --- WEATHER DATA ---
-def get_weather_data(city_name: str, hours: int = 48):
-    """Fetch next 48h forecast from OpenWeatherMap."""
+async def get_weather_data(city_name: str, hours: int = 48):
     if city_name not in CITY_COORDINATES:
         return None, f"Invalid city: {city_name}"
     
+    if not OBSERVATION_API_KEY:
+        return None, "Missing Met Office Observation API key"
+    
     coords = CITY_COORDINATES[city_name]
-    lat, lon = coords["lat"], coords["lon"]
+    url = f"https://api.metoffice.gov.uk/land-observations/nearest?lat={coords['lat']}&lon={coords['lon']}"
+    headers = {"Authorization": f"Bearer {OBSERVATION_API_KEY}"}
     
-    if not WEATHER_API_KEY:
-        return None, "Missing OpenWeatherMap API key"
-    
-    url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&units=metric&appid={WEATHER_API_KEY}"
-    
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            return None, f"Weather API error: {resp.status_code}"
-        data = resp.json()["list"][:hours//3]  # 3-hourly forecast
-        
-        df = pd.DataFrame({
-            "Time": [datetime.fromisoformat(item["dt_txt"]) for item in data],
-            "Temperature": [item["main"]["temp"] for item in data],
-            "Wind_Speed": [item["wind"]["speed"] for item in data],
-            "Wind_Direction": [item["wind"]["deg"] for item in data],
-            "Cloud_Cover": [item["clouds"]["all"] for item in data],
-            "Precipitation": [item.get("rain", {}).get("3h", 0) + item.get("snow", {}).get("3h", 0) for item in data]
-        })
-        
-        month = df["Time"].iloc[0].month
-        norm_temp = UK_MONTHLY_NORM_TEMP.get(month, 10.0)
-        df["Temp_Anomaly"] = df["Temperature"] - norm_temp
-        
-        return df, None
-    except requests.exceptions.Timeout:
-        return None, "Weather API timeout"
-    except Exception as e:
-        return None, str(e)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                return None, f"Observation API error: {resp.status_code}"
+            data = resp.json().get("features", [])
+            if not data:
+                return None, "No observation data returned"
 
-# --- NATIONAL GRID ESO DATA ---
-def get_elexon_data(ticker: str = "generationmix", hours: int = 48):
-    """
-    Fetch recent UK electricity generation mix data from National Grid ESO API.
-    """
-    try:
-        url = "https://api.nationalgrideso.com/api/system/generation-mix"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            return None, f"ESO API error: {resp.status_code}"
+            df = pd.DataFrame([{
+                "Time": datetime.fromisoformat(f["properties"]["Date"][:-1]),
+                "Temperature": f["properties"].get("air_temperature"),
+                "Wind_Speed": f["properties"].get("wind_speed"),
+                "Wind_Direction": f["properties"].get("wind_direction"),
+                "Cloud_Cover": f["properties"].get("total_cloud_cover"),
+                "Precipitation": f["properties"].get("precipitation_amount", 0)
+            } for f in data[:hours]])
 
-        data = resp.json()
-        mix_data = data.get("generationmix", [])
-        df = pd.DataFrame(mix_data)
-        df.rename(columns={"fuel": "Fuel_Type", "perc": "Percentage"}, inplace=True)
+            month = df["Time"].iloc[0].month
+            df["Temp_Anomaly"] = df["Temperature"] - UK_MONTHLY_NORM_TEMP.get(month, 10.0)
+            return df, None
+        except Exception as e:
+            return None, str(e)
 
-        # Add dummy meteorological features for model compatibility
-        df["Time"] = datetime.now()
-        df["Temperature"] = np.random.normal(12, 3, len(df))
-        df["Wind_Speed"] = np.random.uniform(3, 12, len(df))
-        df["Cloud_Cover"] = np.random.uniform(20, 80, len(df))
-        df["Temp_Anomaly"] = df["Temperature"] - 10.0
+# --- MODEL PREDICTIONS ---
+async def get_model_predictions(df_weather, target_col="Wind_Speed", feature_cols=None):
+    if feature_cols is None:
+        feature_cols = ["Temperature", "Wind_Speed", "Cloud_Cover", "Temp_Anomaly"]
 
-        return df, None
+    # Stacking model
+    X = df_weather[feature_cols].values
+    y = df_weather[target_col].values
 
-    except requests.exceptions.Timeout:
-        return None, "National Grid ESO API timeout"
-    except Exception as e:
-        return None, str(e)
-
-# --- STACKING MODEL ---
-def train_stacking_model(df, target_col: str, feature_cols: list):
-    X = df[feature_cols].values
-    y = df[target_col].values
     estimators = [
         ('lr', LinearRegression()),
         ('dt', DecisionTreeRegressor(max_depth=5)),
@@ -116,11 +83,8 @@ def train_stacking_model(df, target_col: str, feature_cols: list):
     ]
     stack_model = StackingRegressor(estimators=estimators, final_estimator=LinearRegression())
     stack_model.fit(X, y)
-    return stack_model
-
-def predict_with_stacking(model, df, feature_cols: list):
-    X = df[feature_cols].values
-    return model.predict(X)
+    preds = stack_model.predict(X)
+    return preds
 
 # --- METEOROLOGICAL INSIGHT ---
 def get_meteorological_insight(df_weather):
