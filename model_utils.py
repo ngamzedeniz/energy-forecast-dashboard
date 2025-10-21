@@ -1,8 +1,16 @@
 import os
 import requests
 import pandas as pd
+import numpy as np
 
-# Şehirler ve koordinatları
+from sklearn.ensemble import RandomForestRegressor, StackingRegressor
+from sklearn.linear_model import LinearRegression
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+from sklearn.model_selection import KFold
+from sklearn.metrics import mean_squared_error
+
+# Cities ve koordinatlar
 CITIES = {
     "London": {"lat": 51.5074, "lon": 0.1278},
     "Manchester": {"lat": 53.4808, "lon": 2.2426},
@@ -16,93 +24,88 @@ CITIES = {
     "Edinburgh": {"lat": 55.9533, "lon": 3.1883}
 }
 
-# Environment variable’dan API key’ler
+# API key'ler
 METOFFICE_OBS_KEY = os.getenv("METOFFICE_OBSERVATION_API_KEY")
 METOFFICE_MODEL_KEY = os.getenv("METOFFICE_MODEL_API_KEY")
 
-# Base URL’ler
+# Base URL'ler
 BASE_OBS_URL = "https://data.hub.api.metoffice.gov.uk/observation-land/1"
 BASE_MODEL_URL = "https://data.hub.api.metoffice.gov.uk/atmospheric-models/1.0.0"
 
+# ------------------------------
+# API çağrıları
+# ------------------------------
 def get_land_observation(city):
-    if city not in CITIES:
-        raise Exception(f"City '{city}' not found")
-    lat = CITIES[city]["lat"]
-    lon = CITIES[city]["lon"]
-
-    # Nearest land observation
-    resp = requests.get(
-        f"{BASE_OBS_URL}/nearest",
-        params={"lat": lat, "lon": lon},
-        headers={"Authorization": f"Bearer {METOFFICE_OBS_KEY}"}
-    )
-    if resp.status_code != 200:
-        raise Exception(f"Observation nearest API error: {resp.status_code} {resp.text}")
-    geohash = resp.json()["geohash"]
-
-    # Observations for geohash
-    resp2 = requests.get(
-        f"{BASE_OBS_URL}/{geohash}",
-        headers={"Authorization": f"Bearer {METOFFICE_OBS_KEY}"}
-    )
-    if resp2.status_code != 200:
-        raise Exception(f"Observation data API error: {resp2.status_code} {resp2.text}")
-
-    obs = resp2.json()
-    df = pd.DataFrame(obs["observations"])
-    return df
-
-def get_model_predictions(ticker):
-    """
-    Atmospheric model API’den gerçek tahminleri alır.
-    Örnek: price ve volume bilgisi JSON’da dönüyor.
-    Burada GRIB dosyalarını parse etmek gerekebilir.
-    """
-    # En son order
-    orders_resp = requests.get(
-        f"{BASE_MODEL_URL}/orders",
-        headers={"Authorization": f"Bearer {METOFFICE_MODEL_KEY}"}
-    )
-    if orders_resp.status_code != 200:
-        raise Exception(f"Model orders API error: {orders_resp.status_code} {orders_resp.text}")
-    orders = orders_resp.json()
-    if len(orders) == 0:
-        raise Exception("No model orders found")
-
-    order_id = orders[0]["orderId"]
-    files_resp = requests.get(
-        f"{BASE_MODEL_URL}/orders/{order_id}/latest",
-        headers={"Authorization": f"Bearer {METOFFICE_MODEL_KEY}"}
-    )
-    files = files_resp.json()
-    if len(files) == 0:
-        raise Exception("No files in latest order")
-
-    file_id = files[0]["fileId"]
-
-    # GRIB/JSON veri
-    data_resp = requests.get(
-        f"{BASE_MODEL_URL}/orders/{order_id}/latest/{file_id}/data",
-        headers={
-            "Authorization": f"Bearer {METOFFICE_MODEL_KEY}",
-            "Accept": "application/x-grib"
-        },
-        params={"dataSpec": "1.1.0"}
-    )
-    if data_resp.status_code not in [200, 302]:
-        raise Exception(f"Model data API error: {data_resp.status_code} {data_resp.text}")
-
-    # Burada GRIB parse edilip price/volume çıkarılmalı
-    # Şu an örnek olarak JSON dönüyorsa:
+    coords = CITIES[city]
     try:
-        data_json = data_resp.json()
-        predicted_price = data_json.get("price", 0)
-        predicted_volume = data_json.get("volume", 0)
-    except:
-        predicted_price = 0
-        predicted_volume = 0
+        # nearest
+        resp = requests.get(
+            f"{BASE_OBS_URL}/nearest",
+            params={"lat": coords["lat"], "lon": coords["lon"]},
+            headers={"apikey": METOFFICE_OBS_KEY}
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        geohash = data["geohash"]
 
-    return predicted_price, predicted_volume
+        # observations for geohash
+        resp2 = requests.get(
+            f"{BASE_OBS_URL}/{geohash}",
+            headers={"apikey": METOFFICE_OBS_KEY}
+        )
+        resp2.raise_for_status()
+        obs = resp2.json()
+        df = pd.DataFrame(obs["observations"])
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Observation nearest API error: {e}")
+
+def get_model_predictions(obs_df):
+    """
+    Stacking model ile predicted_price ve predicted_volume tahmini yapar.
+    Örnek: Basit model, XGBoost, LightGBM, RandomForest stacking.
+    """
+    if obs_df is None or obs_df.empty:
+        return 100.0, 1000  # fallback değer
+    
+    # Feature engineering
+    df = obs_df.copy()
+    df["hour"] = pd.to_datetime(df["datetime"]).dt.hour
+    df["temp_anomaly"] = df.get("temperature_anomaly", 0)
+    
+    features = df[["temperature", "temp_anomaly", "wind_speed", "hour"]].values
+    target_price = 100 + df["wind_speed"].values  # örnek ilişki, gerçek model için değiştirilebilir
+    target_volume = 1000 + df["wind_speed"].values  # örnek
+
+    # Stacking setup
+    base_models = [
+        ('rf', RandomForestRegressor(n_estimators=50, max_depth=5, random_state=42)),
+        ('xgb', XGBRegressor(n_estimators=50, max_depth=3, learning_rate=0.1, random_state=42)),
+        ('lgbm', LGBMRegressor(n_estimators=50, max_depth=5, learning_rate=0.1, random_state=42))
+    ]
+    stack_price = StackingRegressor(estimators=base_models, final_estimator=LinearRegression(), cv=3)
+    stack_volume = StackingRegressor(estimators=base_models, final_estimator=LinearRegression(), cv=3)
+
+    # CV ile fit
+    kf = KFold(n_splits=3, shuffle=True, random_state=42)
+    rmse_price, rmse_volume = [], []
+
+    for tr_idx, val_idx in kf.split(features):
+        X_tr, X_val = features[tr_idx], features[val_idx]
+        y_tr_price, y_val_price = target_price[tr_idx], target_price[val_idx]
+        y_tr_vol, y_val_vol = target_volume[tr_idx], target_volume[val_idx]
+
+        stack_price.fit(X_tr, y_tr_price)
+        stack_volume.fit(X_tr, y_tr_vol)
+
+        rmse_price.append(np.sqrt(mean_squared_error(y_val_price, stack_price.predict(X_val))))
+        rmse_volume.append(np.sqrt(mean_squared_error(y_val_vol, stack_volume.predict(X_val))))
+
+    # Tahmin
+    pred_price = stack_price.predict(features[-1].reshape(1, -1))[0]
+    pred_volume = stack_volume.predict(features[-1].reshape(1, -1))[0]
+
+    return round(pred_price, 2), int(pred_volume)
 
 def generate_insight(obs_df):
     if obs_df is None or obs_df.empty:
