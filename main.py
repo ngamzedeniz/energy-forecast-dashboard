@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from model_utils import CITIES, get_land_observation, generate_insight
+from model_utils import CITIES, get_land_observation, generate_insight, get_model_predictions
 import plotly.express as px
 import pandas as pd
 import numpy as np
@@ -10,13 +10,20 @@ import numpy as np
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
+# Static files (css/js) klasörü
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": None})
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "cities": list(CITIES.keys()), "error_message": None}
+    )
 
 @app.post("/predict", response_class=HTMLResponse)
 def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
     try:
+        # Observation verisi
         obs_df = get_land_observation(city)
         insight = generate_insight(obs_df)
 
@@ -24,7 +31,7 @@ def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
         predicted_price = round(100 + np.random.randn()*5, 2)
         predicted_volume = int(1000 + np.random.randn()*50)
 
-        # Plotly charts
+        # Plotly görselleştirmeler
         temp_plot = px.line(obs_df, x="datetime", y="temperature", title="Temperature Forecast (°C)").to_html(full_html=False)
         anomaly_plot = px.line(obs_df, x="datetime", y="temperature_anomaly", title="Temperature Anomaly (°C)").to_html(full_html=False)
         wind_plot = px.line(obs_df, x="datetime", y="wind_speed", title="Wind Speed (m/s)").to_html(full_html=False)
@@ -48,4 +55,7 @@ def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
             "volume_plot": volume_plot
         })
     except Exception as e:
-        return templates.TemplateResponse("index.html", {"request": request, "cities": CITIES, "error_message": str(e)})
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request, "cities": list(CITIES.keys()), "error_message": str(e)}
+        )
