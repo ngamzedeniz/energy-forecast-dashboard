@@ -5,12 +5,10 @@ from fastapi.templating import Jinja2Templates
 from model_utils import CITIES, get_land_observation, generate_insight, get_model_predictions
 import plotly.express as px
 import pandas as pd
-import numpy as np
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
-# Static files (css/js) klasörü
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
@@ -23,20 +21,19 @@ def index(request: Request):
 @app.post("/predict", response_class=HTMLResponse)
 def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
     try:
-        # Observation verisi
+        # Meteorolojik veri
         obs_df = get_land_observation(city)
         insight = generate_insight(obs_df)
 
-        # Dummy predicted price/volume
-        predicted_price = round(100 + np.random.randn()*5, 2)
-        predicted_volume = int(1000 + np.random.randn()*50)
+        # Gerçek model tahmini
+        predicted_price, predicted_volume = get_model_predictions(ticker)
 
-        # Plotly görselleştirmeler
+        # Plotly grafikler
         temp_plot = px.line(obs_df, x="datetime", y="temperature", title="Temperature Forecast (°C)").to_html(full_html=False)
         anomaly_plot = px.line(obs_df, x="datetime", y="temperature_anomaly", title="Temperature Anomaly (°C)").to_html(full_html=False)
         wind_plot = px.line(obs_df, x="datetime", y="wind_speed", title="Wind Speed (m/s)").to_html(full_html=False)
-        price_plot = px.line(x=list(range(10)), y=100+np.random.randn(10).cumsum(), title="Price Trend").to_html(full_html=False)
-        volume_plot = px.line(x=list(range(10)), y=1000+np.random.randn(10).cumsum(), title="Volume Trend").to_html(full_html=False)
+        price_plot = px.line(x=list(range(10)), y=[predicted_price]*10, title="Price Trend").to_html(full_html=False)
+        volume_plot = px.line(x=list(range(10)), y=[predicted_volume]*10, title="Volume Trend").to_html(full_html=False)
 
         return templates.TemplateResponse("result.html", {
             "request": request,
@@ -54,6 +51,7 @@ def predict(request: Request, ticker: str = Form(...), city: str = Form(...)):
             "price_plot": price_plot,
             "volume_plot": volume_plot
         })
+
     except Exception as e:
         return templates.TemplateResponse(
             "index.html",
