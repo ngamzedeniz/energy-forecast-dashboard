@@ -3,50 +3,69 @@ import requests
 import pandas as pd
 import numpy as np
 
-CITIES = ["London", "Manchester", "Birmingham", "Glasgow", "Edinburgh"]
+# Şehirler ve koordinatları
+CITIES = {
+    "London": {"lat": 51.5074, "lon": 0.1278},
+    "Manchester": {"lat": 53.4808, "lon": 2.2426},
+    "Birmingham": {"lat": 52.4862, "lon": 1.8904},
+    "Leeds": {"lat": 53.8008, "lon": 1.5491},
+    "Glasgow": {"lat": 55.8642, "lon": 4.2518},
+    "Liverpool": {"lat": 53.4084, "lon": 2.9916},
+    "Newcastle": {"lat": 54.9783, "lon": 1.6178},
+    "Sheffield": {"lat": 53.3829, "lon": 1.4659},
+    "Bristol": {"lat": 51.4545, "lon": 2.5879},
+    "Edinburgh": {"lat": 55.9533, "lon": 3.1883}
+}
 
+# API key'ler environment variable'dan
 METOFFICE_OBS_KEY = os.getenv("METOFFICE_OBSERVATION_API_KEY")
 METOFFICE_MODEL_KEY = os.getenv("METOFFICE_MODEL_API_KEY")
 
-BASE_OBS_URL = "https://api-metoffice.cda.climatecloud.com/observation-land/1"
-BASE_MODEL_URL = "https://api-metoffice.cda.climatecloud.com/atmospheric-models/1.0.0"
+# Güncel Base URL'ler
+BASE_OBS_URL = "https://data.hub.api.metoffice.gov.uk/observation-land/1"
+BASE_MODEL_URL = "https://data.hub.api.metoffice.gov.uk/atmospheric-models/1.0.0"
 
 def get_land_observation(city):
+    if city not in CITIES:
+        raise Exception(f"City '{city}' not found")
+    lat = CITIES[city]["lat"]
+    lon = CITIES[city]["lon"]
+
     # nearest endpoint
     resp = requests.get(
         f"{BASE_OBS_URL}/nearest",
-        params={"lat": 51.5072, "lon": -0.1276},  # örnek London koordinat
+        params={"lat": lat, "lon": lon},
         headers={"Authorization": f"Bearer {METOFFICE_OBS_KEY}"}
     )
     if resp.status_code != 200:
-        return None
+        raise Exception(f"Observation nearest API error: {resp.status_code} {resp.text}")
     data = resp.json()
     geohash = data["geohash"]
 
-    # observations for geohash
+    # geohash ile observations
     resp2 = requests.get(
         f"{BASE_OBS_URL}/{geohash}",
         headers={"Authorization": f"Bearer {METOFFICE_OBS_KEY}"}
     )
     if resp2.status_code != 200:
-        return None
+        raise Exception(f"Observation data API error: {resp2.status_code} {resp2.text}")
     obs = resp2.json()
     df = pd.DataFrame(obs["observations"])
     return df
 
 def get_model_predictions(city):
-    # GET orders
+    # orders
     orders_resp = requests.get(
         f"{BASE_MODEL_URL}/orders",
         headers={"Authorization": f"Bearer {METOFFICE_MODEL_KEY}"}
     )
     if orders_resp.status_code != 200:
-        return None
+        raise Exception(f"Model orders API error: {orders_resp.status_code} {orders_resp.text}")
     orders = orders_resp.json()
     if len(orders) == 0:
         return None
 
-    order_id = orders[0]["orderId"]  # en son order
+    order_id = orders[0]["orderId"]
     files_resp = requests.get(
         f"{BASE_MODEL_URL}/orders/{order_id}/latest",
         headers={"Authorization": f"Bearer {METOFFICE_MODEL_KEY}"}
@@ -54,16 +73,19 @@ def get_model_predictions(city):
     files = files_resp.json()
     file_id = files[0]["fileId"]
 
-    # get data
+    # GRIB data
     data_resp = requests.get(
         f"{BASE_MODEL_URL}/orders/{order_id}/latest/{file_id}/data",
-        headers={"Authorization": f"Bearer {METOFFICE_MODEL_KEY}"},
-        params={"dataSpec": "1.1.0"}
+        headers={
+            "Authorization": f"Bearer {METOFFICE_MODEL_KEY}",
+            "Accept": "application/x-grib"
+        },
+        params={"dataSpec": "1.1.0"},
+        allow_redirects=True
     )
     if data_resp.status_code != 200:
-        return None
-    # burayı kendi GRIB/JSON işleme mantığınla parse et
-    return data_resp.json()
+        raise Exception(f"Model data API error: {data_resp.status_code} {data_resp.text}")
+    return data_resp.content  # GRIB binary veya JSON parse mantığına göre
 
 def generate_insight(obs_df):
     if obs_df is None or obs_df.empty:
