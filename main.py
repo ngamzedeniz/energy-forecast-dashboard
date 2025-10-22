@@ -1,4 +1,4 @@
-# main.py (GÜNCELLENMİŞ: GERÇEK MET OFFICE VERİSİNİ KULLANIR)
+# main.py
 
 from fastapi import FastAPI, Request, Form
 from fastapi.templating import Jinja2Templates
@@ -7,7 +7,8 @@ from fastapi.responses import HTMLResponse
 import pandas as pd
 import json
 import plotly.express as px
-from model_utils import run_energy_forecast # Yeni model_utils'u içe aktar
+from model_utils import run_energy_forecast
+import os # Ortam değişkenini kontrol etmek için eklendi
 
 app = FastAPI(title="Energy Forecast Dashboard")
 
@@ -27,9 +28,17 @@ except FileNotFoundError:
 
 def create_plot(df: pd.DataFrame, y_cols: list, title: str, y_label: str) -> str:
     """Plotly ile interaktif çizgi grafik oluşturur ve HTML olarak döndürür."""
-    # ... (Bu fonksiyon önceki main.py'dekiyle aynı kalır)
     df_plot = df.copy()
-    color_map = {'Final_Stacking_Prediction': '#0d6efd', 'Target_Actual': '#dc3545', 'Actual_Temp_C': '#ffc107', 'Actual_WindSpeed': '#198754', 'SpotPrice_EUR': '#6f42c1', 'WindGen_MW': '#4CAF50'}
+    
+    # Okunabilir ve standart renkler
+    color_map = {
+        'Final_Stacking_Prediction': '#0d6efd', # Mavi (Tahmin)
+        'Target_Actual': '#dc3545',            # Kırmızı (Gerçek/Simüle Talep)
+        'Actual_Temp_C': '#ffc107',            # Sarı (Sıcaklık)
+        'Actual_WindSpeed': '#20c997',         # Açık Yeşil (Gerçek Rüzgar)
+        'SpotPrice_EUR': '#6f42c1',            # Mor (Fiyat)
+        'WindGen_MW': '#198754'               # Koyu Yeşil (Simüle Üretim)
+    }
     
     fig = px.line(
         df_plot.reset_index().rename(columns={'index': 'Time'}), 
@@ -49,6 +58,7 @@ def create_plot(df: pd.DataFrame, y_cols: list, title: str, y_label: str) -> str
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    """Ana sayfa: Şehir seçim formunu gösterir."""
     developer_name = "Oğuzhan Kıyak"
     return templates.TemplateResponse(
         "index.html", 
@@ -57,20 +67,32 @@ async def index(request: Request):
 
 @app.post("/forecast", response_class=HTMLResponse)
 async def forecast(request: Request, city: str = Form(...)):
+    """Tahmini çalıştırır ve sonuçları dashboard'da gösterir."""
     developer_name = "Oğuzhan Kıyak"
     
-    # 1. Model Tahminini Çalıştırma
-    results_df = run_energy_forecast(city)
-    
-    if results_df.empty or 'Actual_Temp_C' not in results_df.columns:
-        # Hata durumunu veya Met Office tokenının eksik olduğunu belirt
-        error_message = "Met Office API'sinden veri alınamadı. Lütfen METOFFICE_TOKEN ortam değişkenini kontrol edin veya API kotanızı/izinlerinizi doğrulayın."
+    # 1. METOFFICE_TOKEN kontrolü
+    if not os.getenv('METOFFICE_TOKEN'):
+        error_message = "KRİTİK HATA: Met Office API anahtarı (METOFFICE_TOKEN) ortam değişkenlerinde bulunamadı. Lütfen Render ortam değişkenlerinizi veya yerel 'export' ayarınızı kontrol edin."
         return templates.TemplateResponse(
             "result.html", 
             {"request": request, "city": city, "error": error_message, "developer": developer_name}
         )
 
-    # 2. Meteorolojik Insight ve Yorumlama (Artık Gerçek Verilere Dayalı)
+    # 2. Model Tahminini Çalıştırma
+    results_df = run_energy_forecast(city)
+    
+    if results_df.empty or 'Actual_Temp_C' not in results_df.columns:
+        # Met Office API'sinden veri alınamadıysa veya eksikse daha detaylı mesaj
+        error_message = (
+            "Met Office API'sinden veri alınamadı veya işlenemedi. "
+            "Olası nedenler: API Anahtarı hatalı (401/403), kota doldu (429), veya şehir için gözlem verisi mevcut değil."
+        )
+        return templates.TemplateResponse(
+            "result.html", 
+            {"request": request, "city": city, "error": error_message, "developer": developer_name}
+        )
+
+    # 3. Meteorolojik Insight ve Yorumlama (Artık Gerçek Verilere Dayalı)
     avg_temp = results_df['Actual_Temp_C'].mean()
     avg_wind_speed_actual = results_df['Actual_WindSpeed'].mean() # Gerçek rüzgar hızı
     max_wind_speed_actual = results_df['Actual_WindSpeed'].max()
@@ -80,22 +102,22 @@ async def forecast(request: Request, city: str = Form(...)):
     interpretation = "Enerji Talep ve Hava Durumu Değerlendirmesi:\n\n"
     
     if avg_temp < 8:
-        interpretation += "• **KRİTİK SOĞUK:** Ortalama sıcaklıklar çok düşük, ısıtma talebi çok yüksek olacaktır.\n"
+        interpretation += "• **KRİTİK SOĞUK:** Ortalama sıcaklıklar çok düşük (<\u2248 8°C), ısıtma talebi çok yüksek olacaktır.\n"
     elif avg_temp < 15:
         interpretation += "• **Soğuk/Ilıman:** Sıcaklıklar ısıtma ihtiyacını doğuruyor. Kış talebi etken.\n"
     elif avg_temp > 22:
-        interpretation += "• **YAZ TALEBİ:** Yüksek sıcaklıklar klima/soğutma talebini ciddi oranda artıracaktır.\n"
+        interpretation += "• **YAZ TALEBİ:** Yüksek sıcaklıklar (>\u2248 22°C) klima/soğutma talebini ciddi oranda artıracaktır.\n"
     else:
         interpretation += "• **Normal Koşullar:** Sıcaklıklar mevsim normallerinde. Talep, ağırlıklı ticari ve fiyat etkisine bağlı.\n"
         
     if avg_wind_speed_actual > 10: # Örneğin 10 m/s üstü yüksek rüzgar sayılabilir
-        interpretation += f"• **Yüksek Rüzgar Hızı:** Gerçek rüzgar hızı ({avg_wind_speed_actual:.1f} m/s) yüksek. Bu, simüle edilmiş rüzgar enerjisi üretimini (WindGen_MW) destekleyerek fiyat baskısını azaltacaktır.\n"
+        interpretation += f"• **Yüksek Rüzgar Hızı:** Gerçek rüzgar hızı ({avg_wind_speed_actual:.1f} m/s) yüksek. Bu, simüle rüzgar enerjisi üretimini destekleyerek fiyat baskısını azaltabilir.\n"
     elif avg_wind_speed_actual < 4:
         interpretation += f"• **Düşük Rüzgar Hızı:** Rüzgar hızı düşük. Şebeke dengelemesi ve yedek enerji kaynaklarına ihtiyaç duyulacaktır.\n"
     else:
         interpretation += "• **Orta Rüzgar:** Rüzgar koşulları stabil.\n"
 
-    # 3. Grafik Oluşturma
+    # 4. Grafik Oluşturma
     
     demand_plot = create_plot(
         results_df, 
@@ -104,7 +126,6 @@ async def forecast(request: Request, city: str = Form(...)):
         y_label="Talep (Birim)"
     )
     
-    # Gerçek Hava Durumu Grafiği (Sıcaklık ve Rüzgar Hızı)
     weather_plot = create_plot(
         results_df, 
         y_cols=['Actual_Temp_C', 'Actual_WindSpeed'], 
@@ -112,7 +133,6 @@ async def forecast(request: Request, city: str = Form(...)):
         y_label="Değer (°C / m/s)"
     )
     
-    # Enerji Piyasası Grafiği (Simülasyon)
     market_plot = create_plot(
         results_df, 
         y_cols=['WindGen_MW', 'SpotPrice_EUR'], 
@@ -120,7 +140,7 @@ async def forecast(request: Request, city: str = Form(...)):
         y_label="Değer (MW / EUR)"
     )
 
-    # 4. Detaylı Tablo Verisi
+    # 5. Detaylı Tablo Verisi
     table_data = results_df.reset_index().rename(columns={'index': 'Time'})
     table_data['Time'] = table_data['Time'].dt.strftime('%Y-%m-%d %H:%M')
     table_rows = table_data[[
@@ -129,7 +149,7 @@ async def forecast(request: Request, city: str = Form(...)):
     ]].round(2).to_dict('records')
 
 
-    # 5. Sonuçları Şablona Gönderme
+    # 6. Sonuçları Şablona Gönderme
     return templates.TemplateResponse(
         "result.html", 
         {
@@ -142,8 +162,8 @@ async def forecast(request: Request, city: str = Form(...)):
             "avg_price": f"{avg_price:.2f}",
             "predicted_demand": f"{results_df['Final_Stacking_Prediction'].iloc[-1]:.2f}",
             "demand_plot": demand_plot,
-            "weather_plot": weather_plot, # Yeni grafik
-            "market_plot": market_plot,   # Yeni grafik
+            "weather_plot": weather_plot, 
+            "market_plot": market_plot,   
             "table_rows": table_rows,
             "developer": developer_name
         }
