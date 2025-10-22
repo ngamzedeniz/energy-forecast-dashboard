@@ -19,7 +19,7 @@
             border-radius: .5rem;
         }
         .insight-card {
-            white-space: pre-wrap; /* Yorumlama metnindeki newlines'ı korur */
+            white-space: pre-wrap;
             font-family: monospace;
             font-size: 0.95em;
             background-color: #e9ecef;
@@ -33,6 +33,7 @@
     
     {% if error %}
         <div class="alert alert-danger">{{ error }}</div>
+        <p class="text-danger">Met Office API'sinden veri alınamadı. Lütfen METOFFICE_TOKEN ortam değişkenini kontrol edin veya API kotanızı/izinlerinizi doğrulayın.</p>
     {% else %}
 
     <div class="row mb-5">
@@ -44,13 +45,13 @@
         </div>
         <div class="col-md-4">
             <div class="card card-stat p-3 h-100">
-                <h5 class="text-muted">Ortalama Sıcaklık</h5>
+                <h5 class="text-muted">Ortalama Gerçek Sıcaklık</h5>
                 <p class="fs-3 fw-bold text-warning">{{ avg_temp }} <span class="text-muted fs-6">°C</span></p>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card card-stat p-3 h-100">
-                <h5 class="text-muted">Ortalama Spot Fiyat</h5>
+                <h5 class="text-muted">Ortalama Spot Fiyat (Sim.)</h5>
                 <p class="fs-3 fw-bold text-success">{{ avg_price }} <span class="text-muted fs-6">EUR</span></p>
             </div>
         </div>
@@ -66,8 +67,8 @@
     <div class="card mb-4 p-3">{{ demand_plot | safe }}</div>
     
     <div class="row">
-        <div class="col-md-6"><div class="card mb-4 p-3">{{ temp_plot | safe }}</div></div>
-        <div class="col-md-6"><div class="card mb-4 p-3">{{ wind_price_plot | safe }}</div></div>
+        <div class="col-md-6"><div class="card mb-4 p-3">{{ weather_plot | safe }}</div></div>
+        <div class="col-md-6"><div class="card mb-4 p-3">{{ market_plot | safe }}</div></div>
     </div>
     
     <h3 class="mb-3 text-secondary">Detaylı Saatlik Veri (Tahmin Bölgesi)</h3>
@@ -78,9 +79,10 @@
                 <th>Zaman (UTC)</th>
                 <th>Stacking Tahmini</th>
                 <th>Gerçek Talep</th>
-                <th>Sıcaklık (°C)</th>
-                <th>Spot Fiyat (EUR)</th>
-                <th>Rüzgar Üretimi (MW)</th>
+                <th>Gerçek Sıcaklık (°C)</th>
+                <th>Gerçek Rüzgar Hızı (m/s)</th>
+                <th>Sim. Spot Fiyat (EUR)</th>
+                <th>Sim. Rüzgar Üretimi (MW)</th>
             </tr>
             </thead>
             <tbody>
@@ -89,7 +91,8 @@
                 <td>{{ row.Time }}</td>
                 <td>{{ row.Final_Stacking_Prediction }}</td>
                 <td>{{ row.Target_Actual }}</td>
-                <td>{{ row.Simulated_Temp_C }}</td>
+                <td>{{ row.Actual_Temp_C }}</td>
+                <td>{{ row.Actual_WindSpeed }}</td>
                 <td>{{ row.SpotPrice_EUR }}</td>
                 <td>{{ row.WindGen_MW }}</td>
             </tr>
