@@ -1,4 +1,4 @@
-# main.py
+# main.py (GÜNCELLENMİŞ: GERÇEK MET OFFICE VERİSİNİ KULLANIR)
 
 from fastapi import FastAPI, Request, Form
 from fastapi.templating import Jinja2Templates
@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 import pandas as pd
 import json
 import plotly.express as px
-from model_utils import run_energy_forecast
+from model_utils import run_energy_forecast # Yeni model_utils'u içe aktar
 
 app = FastAPI(title="Energy Forecast Dashboard")
 
@@ -21,16 +21,15 @@ try:
         CITIES_DATA = json.load(f)
         CITIES_NAMES = [c['name'] for c in CITIES_DATA]
 except FileNotFoundError:
-    CITIES_NAMES = ["London", "Edinburgh", "Berlin"] # Yedek liste
+    CITIES_NAMES = ["Hata: cities.json bulunamadı"]
 
 # --- Yardımcı Fonksiyon: Plotly Grafiği Oluşturma ---
 
 def create_plot(df: pd.DataFrame, y_cols: list, title: str, y_label: str) -> str:
     """Plotly ile interaktif çizgi grafik oluşturur ve HTML olarak döndürür."""
+    # ... (Bu fonksiyon önceki main.py'dekiyle aynı kalır)
     df_plot = df.copy()
-    
-    # Renk sırasını ayarla (Tahmini öne çıkar)
-    color_map = {'Final_Stacking_Prediction': '#0d6efd', 'Target_Actual': '#dc3545', 'Simulated_Temp_C': '#ffc107', 'WindGen_MW': '#198754', 'SpotPrice_EUR': '#6f42c1'}
+    color_map = {'Final_Stacking_Prediction': '#0d6efd', 'Target_Actual': '#dc3545', 'Actual_Temp_C': '#ffc107', 'Actual_WindSpeed': '#198754', 'SpotPrice_EUR': '#6f42c1', 'WindGen_MW': '#4CAF50'}
     
     fig = px.line(
         df_plot.reset_index().rename(columns={'index': 'Time'}), 
@@ -50,7 +49,6 @@ def create_plot(df: pd.DataFrame, y_cols: list, title: str, y_label: str) -> str
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Ana sayfa: Şehir seçim formunu gösterir."""
     developer_name = "Oğuzhan Kıyak"
     return templates.TemplateResponse(
         "index.html", 
@@ -59,40 +57,43 @@ async def index(request: Request):
 
 @app.post("/forecast", response_class=HTMLResponse)
 async def forecast(request: Request, city: str = Form(...)):
-    """Tahmini çalıştırır ve sonuçları dashboard'da gösterir."""
     developer_name = "Oğuzhan Kıyak"
     
     # 1. Model Tahminini Çalıştırma
     results_df = run_energy_forecast(city)
     
-    if results_df.empty:
+    if results_df.empty or 'Actual_Temp_C' not in results_df.columns:
+        # Hata durumunu veya Met Office tokenının eksik olduğunu belirt
+        error_message = "Met Office API'sinden veri alınamadı. Lütfen METOFFICE_TOKEN ortam değişkenini kontrol edin veya API kotanızı/izinlerinizi doğrulayın."
         return templates.TemplateResponse(
             "result.html", 
-            {"request": request, "city": city, "error": "Model için yeterli veri oluşturulamadı veya temizlik sonrası veri kalmadı.", "developer": developer_name}
+            {"request": request, "city": city, "error": error_message, "developer": developer_name}
         )
 
-    # 2. Meteorolojik Insight ve Yorumlama
-    avg_temp = results_df['Simulated_Temp_C'].mean()
-    avg_wind = results_df['WindGen_MW'].mean()
-    max_wind = results_df['WindGen_MW'].max()
-    avg_price = results_df['SpotPrice_EUR'].mean()
+    # 2. Meteorolojik Insight ve Yorumlama (Artık Gerçek Verilere Dayalı)
+    avg_temp = results_df['Actual_Temp_C'].mean()
+    avg_wind_speed_actual = results_df['Actual_WindSpeed'].mean() # Gerçek rüzgar hızı
+    max_wind_speed_actual = results_df['Actual_WindSpeed'].max()
+    avg_price = results_df['SpotPrice_EUR'].mean() # Simüle fiyat
     
     # Gelişmiş Yorumlama
     interpretation = "Enerji Talep ve Hava Durumu Değerlendirmesi:\n\n"
     
-    if avg_temp < 10:
-        interpretation += "• **Soğuk Hava Uyarısı:** Ortalama sıcaklıkların düşük olması ($\le 10^\circ C$), Isıtma Derece Günlerini (HDD) önemli ölçüde artırarak elektrik talebini yukarı çekecektir.\n"
-    elif avg_temp > 20:
-        interpretation += "• **Sıcak Hava Uyarısı:** Ortalama sıcaklıkların yüksek olması ($\ge 20^\circ C$), Soğutma Derece Günlerini (CDD) artırarak klima kullanımına bağlı talebi yükseltecektir.\n"
+    if avg_temp < 8:
+        interpretation += "• **KRİTİK SOĞUK:** Ortalama sıcaklıklar çok düşük, ısıtma talebi çok yüksek olacaktır.\n"
+    elif avg_temp < 15:
+        interpretation += "• **Soğuk/Ilıman:** Sıcaklıklar ısıtma ihtiyacını doğuruyor. Kış talebi etken.\n"
+    elif avg_temp > 22:
+        interpretation += "• **YAZ TALEBİ:** Yüksek sıcaklıklar klima/soğutma talebini ciddi oranda artıracaktır.\n"
     else:
-        interpretation += "• **Ilıman Koşullar:** Sıcaklıklar mevsim normallerinde seyrediyor. Talep, ağırlıklı olarak ticari/endüstriyel aktivite ve enerji fiyatlarına bağlı olacaktır.\n"
+        interpretation += "• **Normal Koşullar:** Sıcaklıklar mevsim normallerinde. Talep, ağırlıklı ticari ve fiyat etkisine bağlı.\n"
         
-    if avg_wind > 650:
-        interpretation += f"• **Yüksek Rüzgar Üretimi:** Ortalama rüzgar üretimi ($> 650MW$) yüksek. Bu, şebekeye bol miktarda yenilenebilir enerji sağlayarak spot fiyatlar üzerinde **aşağı yönlü** bir baskı oluşturabilir.\n"
-    elif avg_wind < 400:
-        interpretation += f"• **Düşük Rüzgar Üretimi:** Rüzgar üretimi düşük ($< 400MW$). Yenilenebilir enerjideki bu düşüş, fiyatları ve fosil yakıtlara olan talebi **artırabilir**.\n"
+    if avg_wind_speed_actual > 10: # Örneğin 10 m/s üstü yüksek rüzgar sayılabilir
+        interpretation += f"• **Yüksek Rüzgar Hızı:** Gerçek rüzgar hızı ({avg_wind_speed_actual:.1f} m/s) yüksek. Bu, simüle edilmiş rüzgar enerjisi üretimini (WindGen_MW) destekleyerek fiyat baskısını azaltacaktır.\n"
+    elif avg_wind_speed_actual < 4:
+        interpretation += f"• **Düşük Rüzgar Hızı:** Rüzgar hızı düşük. Şebeke dengelemesi ve yedek enerji kaynaklarına ihtiyaç duyulacaktır.\n"
     else:
-        interpretation += "• **Normal Rüzgar:** Rüzgar enerjisi üretimi normal seviyelerde. Piyasa dengeli.\n"
+        interpretation += "• **Orta Rüzgar:** Rüzgar koşulları stabil.\n"
 
     # 3. Grafik Oluşturma
     
@@ -103,17 +104,19 @@ async def forecast(request: Request, city: str = Form(...)):
         y_label="Talep (Birim)"
     )
     
-    temp_plot = create_plot(
+    # Gerçek Hava Durumu Grafiği (Sıcaklık ve Rüzgar Hızı)
+    weather_plot = create_plot(
         results_df, 
-        y_cols=['Simulated_Temp_C'], 
-        title="Simüle Edilmiş Sıcaklık Değişimi", 
-        y_label="Sıcaklık (°C)"
+        y_cols=['Actual_Temp_C', 'Actual_WindSpeed'], 
+        title="Gerçek Met Office Hava Durumu (Sıcaklık ve Rüzgar Hızı)", 
+        y_label="Değer (°C / m/s)"
     )
     
-    wind_price_plot = create_plot(
+    # Enerji Piyasası Grafiği (Simülasyon)
+    market_plot = create_plot(
         results_df, 
         y_cols=['WindGen_MW', 'SpotPrice_EUR'], 
-        title="Rüzgar Üretimi ve Spot Fiyat İlişkisi", 
+        title="Simüle Edilmiş Enerji Piyasası (Üretim ve Fiyat)", 
         y_label="Değer (MW / EUR)"
     )
 
@@ -122,7 +125,7 @@ async def forecast(request: Request, city: str = Form(...)):
     table_data['Time'] = table_data['Time'].dt.strftime('%Y-%m-%d %H:%M')
     table_rows = table_data[[
         'Time', 'Final_Stacking_Prediction', 'Target_Actual', 
-        'Simulated_Temp_C', 'SpotPrice_EUR', 'WindGen_MW'
+        'Actual_Temp_C', 'Actual_WindSpeed', 'SpotPrice_EUR', 'WindGen_MW'
     ]].round(2).to_dict('records')
 
 
@@ -134,13 +137,13 @@ async def forecast(request: Request, city: str = Form(...)):
             "city": city,
             "interpretation": interpretation,
             "avg_temp": f"{avg_temp:.1f}",
-            "avg_wind": f"{avg_wind:.1f}",
-            "max_wind": f"{max_wind:.1f}",
+            "avg_wind": f"{avg_wind_speed_actual:.1f}",
+            "max_wind": f"{max_wind_speed_actual:.1f}",
             "avg_price": f"{avg_price:.2f}",
             "predicted_demand": f"{results_df['Final_Stacking_Prediction'].iloc[-1]:.2f}",
             "demand_plot": demand_plot,
-            "temp_plot": temp_plot,
-            "wind_price_plot": wind_price_plot,
+            "weather_plot": weather_plot, # Yeni grafik
+            "market_plot": market_plot,   # Yeni grafik
             "table_rows": table_rows,
             "developer": developer_name
         }
