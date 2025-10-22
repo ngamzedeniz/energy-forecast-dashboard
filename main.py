@@ -8,7 +8,11 @@ import pandas as pd
 import json
 import plotly.express as px
 from model_utils import run_energy_forecast
-import os # Ortam değişkenini kontrol etmek için eklendi
+import os
+import logging
+
+# Loglama ayarı (Render loglarına düşmesi için)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = FastAPI(title="Energy Forecast Dashboard")
 
@@ -23,6 +27,8 @@ try:
         CITIES_NAMES = [c['name'] for c in CITIES_DATA]
 except FileNotFoundError:
     CITIES_NAMES = ["Hata: cities.json bulunamadı"]
+    logging.error("cities.json dosyası bulunamadı!")
+
 
 # --- Yardımcı Fonksiyon: Plotly Grafiği Oluşturma ---
 
@@ -70,9 +76,15 @@ async def forecast(request: Request, city: str = Form(...)):
     """Tahmini çalıştırır ve sonuçları dashboard'da gösterir."""
     developer_name = "Oğuzhan Kıyak"
     
-    # 1. METOFFICE_TOKEN kontrolü
+    logging.info(f"'{city}' için tahmin isteği alındı.")
+    
+    # 1. METOFFICE_TOKEN kontrolü (API çağrısından önce en hızlı kontrol)
     if not os.getenv('METOFFICE_TOKEN'):
-        error_message = "KRİTİK HATA: Met Office API anahtarı (METOFFICE_TOKEN) ortam değişkenlerinde bulunamadı. Lütfen Render ortam değişkenlerinizi veya yerel 'export' ayarınızı kontrol edin."
+        error_message = (
+            "KRİTİK HATA: Met Office API anahtarı (METOFFICE_TOKEN) ortam değişkenlerinde bulunamadı. "
+            "Lütfen Render ortam değişkenlerinizi veya yerel 'export' ayarınızı kontrol edin."
+        )
+        logging.error(error_message)
         return templates.TemplateResponse(
             "result.html", 
             {"request": request, "city": city, "error": error_message, "developer": developer_name}
@@ -82,21 +94,24 @@ async def forecast(request: Request, city: str = Form(...)):
     results_df = run_energy_forecast(city)
     
     if results_df.empty or 'Actual_Temp_C' not in results_df.columns:
-        # Met Office API'sinden veri alınamadıysa veya eksikse daha detaylı mesaj
+        # Hata Mesajı: Bu hatanın nedeni için Render loglarını kontrol etmeliyiz.
         error_message = (
             "Met Office API'sinden veri alınamadı veya işlenemedi. "
-            "Olası nedenler: API Anahtarı hatalı (401/403), kota doldu (429), veya şehir için gözlem verisi mevcut değil."
+            "Lütfen Render 'Logs' sekmesini kontrol edin! Olası nedenler: "
+            "API Anahtarı hatalı (401/403), kota doldu (429), veya seçilen şehir için gözlem verisi mevcut değil."
         )
+        logging.error(f"Tahmin başarısız. Sebep: {error_message.split('.')[0]}")
         return templates.TemplateResponse(
             "result.html", 
             {"request": request, "city": city, "error": error_message, "developer": developer_name}
         )
 
     # 3. Meteorolojik Insight ve Yorumlama (Artık Gerçek Verilere Dayalı)
+    # Veri başarıyla alındıysa bu kısım çalışır.
     avg_temp = results_df['Actual_Temp_C'].mean()
-    avg_wind_speed_actual = results_df['Actual_WindSpeed'].mean() # Gerçek rüzgar hızı
+    avg_wind_speed_actual = results_df['Actual_WindSpeed'].mean() 
     max_wind_speed_actual = results_df['Actual_WindSpeed'].max()
-    avg_price = results_df['SpotPrice_EUR'].mean() # Simüle fiyat
+    avg_price = results_df['SpotPrice_EUR'].mean() 
     
     # Gelişmiş Yorumlama
     interpretation = "Enerji Talep ve Hava Durumu Değerlendirmesi:\n\n"
@@ -110,7 +125,7 @@ async def forecast(request: Request, city: str = Form(...)):
     else:
         interpretation += "• **Normal Koşullar:** Sıcaklıklar mevsim normallerinde. Talep, ağırlıklı ticari ve fiyat etkisine bağlı.\n"
         
-    if avg_wind_speed_actual > 10: # Örneğin 10 m/s üstü yüksek rüzgar sayılabilir
+    if avg_wind_speed_actual > 10: 
         interpretation += f"• **Yüksek Rüzgar Hızı:** Gerçek rüzgar hızı ({avg_wind_speed_actual:.1f} m/s) yüksek. Bu, simüle rüzgar enerjisi üretimini destekleyerek fiyat baskısını azaltabilir.\n"
     elif avg_wind_speed_actual < 4:
         interpretation += f"• **Düşük Rüzgar Hızı:** Rüzgar hızı düşük. Şebeke dengelemesi ve yedek enerji kaynaklarına ihtiyaç duyulacaktır.\n"
@@ -118,27 +133,9 @@ async def forecast(request: Request, city: str = Form(...)):
         interpretation += "• **Orta Rüzgar:** Rüzgar koşulları stabil.\n"
 
     # 4. Grafik Oluşturma
-    
-    demand_plot = create_plot(
-        results_df, 
-        y_cols=['Final_Stacking_Prediction', 'Target_Actual'], 
-        title=f"{city} Enerji Talebi Tahmini", 
-        y_label="Talep (Birim)"
-    )
-    
-    weather_plot = create_plot(
-        results_df, 
-        y_cols=['Actual_Temp_C', 'Actual_WindSpeed'], 
-        title="Gerçek Met Office Hava Durumu (Sıcaklık ve Rüzgar Hızı)", 
-        y_label="Değer (°C / m/s)"
-    )
-    
-    market_plot = create_plot(
-        results_df, 
-        y_cols=['WindGen_MW', 'SpotPrice_EUR'], 
-        title="Simüle Edilmiş Enerji Piyasası (Üretim ve Fiyat)", 
-        y_label="Değer (MW / EUR)"
-    )
+    demand_plot = create_plot(results_df, y_cols=['Final_Stacking_Prediction', 'Target_Actual'], title=f"{city} Enerji Talebi Tahmini", y_label="Talep (Birim)")
+    weather_plot = create_plot(results_df, y_cols=['Actual_Temp_C', 'Actual_WindSpeed'], title="Gerçek Met Office Hava Durumu (Sıcaklık ve Rüzgar Hızı)", y_label="Değer (°C / m/s)")
+    market_plot = create_plot(results_df, y_cols=['WindGen_MW', 'SpotPrice_EUR'], title="Simüle Edilmiş Enerji Piyasası (Üretim ve Fiyat)", y_label="Değer (MW / EUR)")
 
     # 5. Detaylı Tablo Verisi
     table_data = results_df.reset_index().rename(columns={'index': 'Time'})
@@ -150,6 +147,7 @@ async def forecast(request: Request, city: str = Form(...)):
 
 
     # 6. Sonuçları Şablona Gönderme
+    logging.info(f"'{city}' için tahmin başarılı. Ortalama sıcaklık: {avg_temp:.1f}°C")
     return templates.TemplateResponse(
         "result.html", 
         {
