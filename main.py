@@ -48,7 +48,7 @@ def create_plot(df: pd.DataFrame, y_cols: list, title: str, y_label: str) -> str
         x='Time', 
         y=y_cols, 
         title=title,
-        labels={'value': y_label, 'Time': 'Zaman'},
+        labels={'value': y_label, 'Time': 'Time'},
         height=400,
         color_discrete_map={col: color_map.get(col, '#333') for col in y_cols}
     )
@@ -61,7 +61,7 @@ def create_plot(df: pd.DataFrame, y_cols: list, title: str, y_label: str) -> str
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    developer_name = "Oğuzhan Kıyak"
+    developer_name = "Gamze Deniz"
     return templates.TemplateResponse(
         "index.html", 
         {"request": request, "cities": CITIES_NAMES, "developer": developer_name}
@@ -93,40 +93,44 @@ async def forecast(request: Request, city: str = Form(...)):
             {"request": request, "city": city, "error": error_message, "developer": developer_name}
         )
 
-    # 2. Meteorolojik Insight ve Yorumlama (API Kaynağı Bilgisi Eklendi)
-    
-    avg_temp = results_df['Actual_Temp_C'].mean()
-    avg_wind_speed_actual = results_df['Actual_WindSpeed'].mean() 
-    max_wind_speed_actual = results_df['Actual_WindSpeed'].max()
-    avg_price = results_df['SpotPrice_EUR'].mean() 
-    
-    # Başarı Mesajı ve API Kaynağı Bilgisi
-    interpretation = f"**Veri Kaynağı:** {api_source} API'si kullanılmıştır.\n\n"
-    interpretation += "Enerji Talep ve Hava Durumu Değerlendirmesi:\n\n"
-    # ... (Yorumlama kısmı aynı kalır)
-    
+    # 2. Success Message and API Source Info
+    interpretation = f"**Data Source:** {api_source} API used.\n\n"
+    interpretation += "**Energy Demand and Weather Assessment:**\n\n"
+
     if avg_temp < 8:
-        interpretation += "• **KRİTİK SOĞUK:** Ortalama sıcaklıklar çok düşük (<\u2248 8°C), ısıtma talebi çok yüksek olacaktır.\n"
+        interpretation += "• **CRITICAL COLD:** Average temperatures are very low (<≈ 8°C), heating demand will be significantly high.\n"
     elif avg_temp < 15:
-        interpretation += "• **Soğuk/Ilıman:** Sıcaklıklar ısıtma ihtiyacını doğuruyor. Kış talebi etken.\n"
+        interpretation += "• **Cold/Mild:** Temperatures are low enough to drive heating needs. Winter demand is a key factor.\n"
     elif avg_temp > 22:
-        interpretation += "• **YAZ TALEBİ:** Yüksek sıcaklıklar (>\u2248 22°C) klima/soğutma talebini ciddi oranda artıracaktır.\n"
+        interpretation += "• **SUMMER DEMAND:** High temperatures (>≈ 22°C) will considerably increase cooling/air conditioning demand.\n"
     else:
-        interpretation += "• **Normal Koşullar:** Sıcaklıklar mevsim normallerinde. Talep, ağırlıklı ticari ve fiyat etkisine bağlı.\n"
+        interpretation += "• **Normal Conditions:** Temperatures are near seasonal averages. Demand depends mostly on commercial and market price effects.\n"
         
     if avg_wind_speed_actual > 10: 
-        interpretation += f"• **Yüksek Rüzgar Hızı:** Gerçek rüzgar hızı ({avg_wind_speed_actual:.1f} m/s) yüksek. Bu, simüle rüzgar enerjisi üretimini destekleyerek fiyat baskısını azaltabilir.\n"
+        interpretation += f"• **High Wind Speed:** Actual wind speed ({avg_wind_speed_actual:.1f} m/s) is high. This supports simulated wind energy generation and may reduce price pressure.\n"
     elif avg_wind_speed_actual < 4:
-        interpretation += f"• **Düşük Rüzgar Hızı:** Rüzgar hızı düşük. Şebeke dengelemesi ve yedek enerji kaynaklarına ihtiyaç duyulacaktır.\n"
+        interpretation += f"• **Low Wind Speed:** Wind speeds are low. Grid balancing and backup energy sources will be required.\n"
     else:
-        interpretation += "• **Orta Rüzgar:** Rüzgar koşulları stabil.\n"
+        interpretation += "• **Moderate Wind:** Wind conditions are stable.\n"
 
-    # 3. Grafik Oluşturma (AYNI KALIR)
-    demand_plot = create_plot(results_df, y_cols=['Final_Stacking_Prediction', 'Target_Actual'], title=f"{city} Enerji Talebi Tahmini", y_label="Talep (Birim)")
-    weather_plot = create_plot(results_df, y_cols=['Actual_Temp_C', 'Actual_WindSpeed'], title=f"Gerçek Hava Durumu ({api_source})", y_label="Değer (°C / m/s)")
-    market_plot = create_plot(results_df, y_cols=['WindGen_MW', 'SpotPrice_EUR'], title="Simüle Edilmiş Enerji Piyasası (Üretim ve Fiyat)", y_label="Değer (MW / EUR)")
 
-    # 4. Detaylı Tablo Verisi (AYNI KALIR)
+    # 3. Plot Creation (UNCHANGED FUNCTIONALITY)
+    demand_plot = create_plot(results_df, 
+                              y_cols=['Final_Stacking_Prediction', 'Target_Actual'], 
+                              title=f"{city} Energy Demand Forecast", 
+                              y_label="Demand (Units)")
+    
+    weather_plot = create_plot(results_df, 
+                               y_cols=['Actual_Temp_C', 'Actual_WindSpeed'], 
+                               title=f"Actual Weather Conditions ({api_source})", 
+                               y_label="Value (°C / m/s)")
+    
+    market_plot = create_plot(results_df, 
+                              y_cols=['WindGen_MW', 'SpotPrice_EUR'], 
+                              title="Simulated Energy Market (Generation & Price)", 
+                              y_label="Value (MW / EUR)")
+
+    # 4. Detailed Table Data (UNCHANGED FUNCTIONALITY)
     table_data = results_df.reset_index().rename(columns={'index': 'Time'})
     table_data['Time'] = table_data['Time'].dt.strftime('%Y-%m-%d %H:%M')
     table_rows = table_data[[
@@ -134,16 +138,15 @@ async def forecast(request: Request, city: str = Form(...)):
         'Actual_Temp_C', 'Actual_WindSpeed', 'SpotPrice_EUR', 'WindGen_MW'
     ]].round(2).to_dict('records')
 
-
-    # 5. Sonuçları Şablona Gönderme
-    logging.info(f"'{city}' için tahmin başarılı. API Kaynağı: {api_source}")
+    # 5. Send Results to Template
+    logging.info(f"Forecast successful for '{city}'. API Source: {api_source}")
     return templates.TemplateResponse(
         "result.html", 
         {
             "request": request,
             "city": city,
             "interpretation": interpretation,
-            # ... (Diğer değerler aynı kalır)
+            # ... (Other values remain the same)
             "avg_temp": f"{avg_temp:.1f}",
             "avg_wind": f"{avg_wind_speed_actual:.1f}",
             "max_wind": f"{max_wind_speed_actual:.1f}",
@@ -156,3 +159,4 @@ async def forecast(request: Request, city: str = Form(...)):
             "developer": developer_name
         }
     )
+
