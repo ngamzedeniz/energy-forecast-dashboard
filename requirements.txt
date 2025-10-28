@@ -12,3 +12,6 @@ pydantic
 httpx
 xgboost
 lightgbm
+yfinance
+python-dateutil
+pytz
