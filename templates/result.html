@@ -33,26 +33,26 @@
     
     {% if error %}
         <div class="alert alert-danger">{{ error }}</div>
-        <p class="text-danger">Failed to retrieve data from the Met Office API. Please verify your <code>METOFFICE_TOKEN</code> or API permissions.</p>
+        <p class="text-danger">Failed to retrieve data. Please check API permissions and server logs.</p>
     {% else %}
 
     <div class="row mb-5">
         <div class="col-md-4">
             <div class="card card-stat p-3 h-100">
                 <h5 class="text-muted">Instant Demand Estimate</h5>
-                <p class="fs-3 text-primary fw-bold">{{ predicted_demand }} <span class="text-muted fs-6">Units</span></p>
+                <p class="fs-3 text-primary fw-bold">{{ predicted_demand or '-' }} <span class="text-muted fs-6">Units</span></p>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card card-stat p-3 h-100">
                 <h5 class="text-muted">Avg. Observed Temperature</h5>
-                <p class="fs-3 fw-bold text-warning">{{ avg_temp }} <span class="text-muted fs-6">°C</span></p>
+                <p class="fs-3 fw-bold text-warning">{{ avg_temp or '-' }} <span class="text-muted fs-6">°C</span></p>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card card-stat p-3 h-100">
-                <h5 class="text-muted">Avg. Spot Price (Simulated)</h5>
-                <p class="fs-3 fw-bold text-success">{{ avg_price }} <span class="text-muted fs-6">EUR</span></p>
+                <h5 class="text-muted">Avg. Spot Price (EUR)</h5>
+                <p class="fs-3 fw-bold text-success">{{ avg_price or '-' }} <span class="text-muted fs-6">EUR</span></p>
             </div>
         </div>
     </div>
@@ -64,7 +64,6 @@
 
     <div class="d-flex align-items-center justify-content-between mb-3">
         <h3 class="text-secondary mb-0">Interactive Charts</h3>
-        <!-- Info button -->
         <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#modelInfoModal">
             Model Info
         </button>
@@ -80,14 +79,14 @@
           </div>
           <div class="modal-body">
             <p>
-                The forecast engine integrates near-real-time weather observations with simulated market dynamics.  
+                The forecast engine integrates near-real-time weather observations with real UK energy market data.  
                 Meteorological inputs are primarily sourced from the <strong>UK Met Office API</strong>.  
-                When data is unavailable, it automatically switches to the <strong>Open-Meteo Archive API</strong> as backup.  
+                When data is unavailable, it automatically switches to the <strong>Open-Meteo Archive API</strong>.  
             </p>
             <p>
+                Electricity spot prices are sourced from the <strong>Elexon API</strong> for UK regions.  
                 The model calculates <em>HDD/CDD indices</em> and applies a lightweight <strong>stacking regression</strong> ensemble  
-                combining weather-driven and simulated demand patterns to estimate short-term load fluctuations.  
-                Generated values are illustrative and optimized for demonstration purposes.
+                combining weather-driven and observed market patterns to estimate short-term load fluctuations.
             </p>
           </div>
           <div class="modal-footer">
@@ -122,12 +121,12 @@
             {% for row in table_rows %}
             <tr>
                 <td>{{ row.Time }}</td>
-                <td>{{ row.Final_Stacking_Prediction }}</td>
-                <td>{{ row.Target_Actual }}</td>
-                <td>{{ row.Actual_Temp_C }}</td>
-                <td>{{ row.Actual_WindSpeed }}</td>
-                <td>{{ row.SpotPrice_EUR }}</td>
-                <td>{{ row.WindGen_MW }}</td>
+                <td>{{ row.Final_Stacking_Prediction or '-' }}</td>
+                <td>{{ row.Target_Actual or '-' }}</td>
+                <td>{{ row.Actual_Temp_C or '-' }}</td>
+                <td>{{ row.Actual_WindSpeed or '-' }}</td>
+                <td>{{ row.SpotPrice_EUR or '-' }}</td>
+                <td>{{ row.WindGen_MW or '-' }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -139,7 +138,7 @@
 </div>
 
 <div class="footer">
-    Developed by <strong>Gamze Deniz</strong> – ngamzedeniz[@]gmail.com
+    Developed by <strong>Gamze Deniz</strong>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
