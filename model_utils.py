@@ -1,151 +1,180 @@
-# model_utils.py (Güncellenmiş, Gerçek Veri ile)
+# model_utils.py
 import pandas as pd
 import numpy as np
-import os
 import requests
 import json
 import datetime
 import yfinance as yf
-from requests.exceptions import RequestException
+from urllib.parse import urlencode
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from sklearn.linear_model import LinearRegression
 
-# --- Şehir Verilerini Yükleme ---
-try:
-    with open("cities.json", "r") as f:
-        CITIES_DATA = json.load(f)
-        CITIES_DICT = {c['name']: c for c in CITIES_DATA}
-except FileNotFoundError:
-    CITIES_DICT = {}
+# cities.json yükle
+with open("cities.json", "r") as f:
+    CITIES = json.load(f)
 
-# --- HDD/CDD Hesaplama ---
-def calculate_hdd_cdd(temp_c: float, base_temp: float = 18.0, hdd: bool = True) -> float:
-    return max(0, base_temp - temp_c) if hdd else max(0, temp_c - base_temp)
-
-# --- OpenMeteo API ---
-def get_openmeteo_data(lat: float, lon: float) -> pd.DataFrame:
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=5)
-    url = "https://archive-api.open-meteo.com/v1/archive"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "hourly": "temperature_2m,windspeed_10m",
-        "timezone": "auto",
-        "temperature_unit": "celsius",
-        "wind_speed_unit": "ms"
-    }
+# NESO SQL → enerji fiyat verisi
+def get_neso_price_data(limit=5000):
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code != 200: return pd.DataFrame()
-        data = resp.json()
-        if 'hourly' not in data: return pd.DataFrame()
-        hourly = data['hourly']
+        sql_query = f'''SELECT * FROM "b2bde559-3455-4021-b179-dfe60c0337b0" ORDER BY "_id" ASC LIMIT {limit}'''
+        params = {'sql': sql_query}
+        url = "https://api.neso.energy/api/3/action/datastore_search_sql"
+        r = requests.get(url, params=urlencode(params), timeout=20)
+        j = r.json()
+        records = j["result"]["records"]
+
+        df = pd.DataFrame(records)
+        df["time"] = pd.to_datetime(df["time"])
+        df.set_index("time", inplace=True)
+        df.rename(columns={"price": "SpotPrice_EUR"}, inplace=True)
+        df["SpotPrice_EUR"] = pd.to_numeric(df["SpotPrice_EUR"], errors="coerce")
+
+        return df[["SpotPrice_EUR"]].dropna()
+
+    except Exception as e:
+        print("NESO GET ERROR:", e)
+        return pd.DataFrame()
+
+# Open-Meteo → hava
+def get_weather(lat, lon):
+    try:
+        end = datetime.date.today()
+        start = end - datetime.timedelta(days=5)
+        url = "https://archive-api.open-meteo.com/v1/archive"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "hourly": "temperature_2m,windspeed_10m",
+            "timezone": "auto",
+        }
+        r = requests.get(url, params=params, timeout=20)
+        j = r.json()
+        hourly = j["hourly"]
+
         df = pd.DataFrame({
-            'Time': pd.to_datetime(hourly['time']),
-            'Actual_Temp_C': hourly['temperature_2m'],
-            'Actual_WindSpeed': hourly['windspeed_10m']
+            "Time": pd.to_datetime(hourly["time"]),
+            "Actual_Temp_C": hourly["temperature_2m"],
+            "Actual_WindSpeed": hourly["windspeed_10m"]
         })
-        df.set_index('Time', inplace=True)
-        df['API_Source'] = 'OpenMeteo'
+        df.set_index("Time", inplace=True)
         return df
-    except Exception:
+    except:
         return pd.DataFrame()
 
-# --- Met Office API ---
-def get_metoffice_data(city: str) -> pd.DataFrame:
-    city_data = CITIES_DICT.get(city)
-    if not city_data: return pd.DataFrame()
-    geohash = city_data.get('geohash')
-    lat = city_data.get('lat')
-    lon = city_data.get('lon')
-    token = os.getenv('METOFFICE_TOKEN')
-    if geohash and token:
-        url = f"https://data.hub.api.metoffice.gov.uk/observation-land/1/{geohash}"
-        try:
-            resp = requests.get(url, params={"apikey": token}, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                df = pd.DataFrame(data)
-                df.rename(columns={'datetime': 'Time', 'temperature': 'Actual_Temp_C', 'wind_speed': 'Actual_WindSpeed'}, inplace=True)
-                df['Time'] = pd.to_datetime(df['Time']).dt.tz_localize('UTC')
-                df.set_index('Time', inplace=True)
-                df = df[['Actual_Temp_C','Actual_WindSpeed']].dropna()
-                df['API_Source'] = 'Met Office'
-                return df
-        except Exception:
-            pass
-    # Fallback OpenMeteo
-    if lat and lon:
-        return get_openmeteo_data(lat, lon)
-    return pd.DataFrame()
-
-# --- OPSD Enerji Verisi ---
-def get_opsd_data() -> pd.DataFrame:
-    """
-    OPSD dataset: Germany renewable generation (Wind) and load.
-    URL örnek: https://data.open-power-system-data.org/time_series/2023-06-30/time_series_60min_singleindex.csv
-    """
-    url = "https://data.open-power-system-data.org/time_series/2023-06-30/time_series_60min_singleindex.csv"
+# Spot fiyat yfinance (yedek)
+def get_spot_backup():
     try:
-        df = pd.read_csv(url, parse_dates=['utc_timestamp'], index_col='utc_timestamp')
-        # Örnek: Wind generation MW ve Total Load MW
-        df_subset = df[['DE_wind_actual_entsoe_transparency','DE_load_actual_entsoe_transparency']].copy()
-        df_subset.rename(columns={
-            'DE_wind_actual_entsoe_transparency': 'WindGen_MW',
-            'DE_load_actual_entsoe_transparency': 'Target_Actual'
-        }, inplace=True)
-        return df_subset
-    except Exception:
+        d = yf.download("EXC.L", period="5d", interval="1h")
+        if d.empty: return pd.DataFrame()
+        return pd.DataFrame({"SpotPrice_EUR": d["Close"]})
+    except:
         return pd.DataFrame()
 
-# --- Spot Fiyat Verisi (yFinance) ---
-def get_spot_price(ticker="EXC.L") -> pd.DataFrame:
-    """
-    EXC.L = Elexon / UK Spot Price (örnek)
-    """
-    try:
-        data = yf.download(ticker, period="5d", interval="1h")
-        if data.empty: return pd.DataFrame()
-        df = pd.DataFrame({'SpotPrice_EUR': data['Close']})
-        return df
-    except Exception:
+# --------- BATCH DATASET OLUŞTURMA ---------
+def build_batch_dataset():
+    print("⏳ 30 şehir için veri indiriliyor...")
+
+    price_df = get_neso_price_data()
+    if price_df.empty:
+        price_df = get_spot_backup()
+
+    all_data = []
+
+    for city in CITIES:
+        lat = city["lat"]
+        lon = city["lon"]
+        name = city["name"]
+
+        weather_df = get_weather(lat, lon)
+        if weather_df.empty: 
+            continue
+
+        merged = price_df.join(weather_df, how="inner")
+        merged["City"] = name
+        all_data.append(merged)
+
+    if not all_data:
         return pd.DataFrame()
 
-# --- run_energy_forecast ---
-def run_energy_forecast(city: str) -> pd.DataFrame:
-    # 1. Hava durumu
-    weather_df = get_metoffice_data(city)
-    if weather_df.empty: return pd.DataFrame()
-    api_source = weather_df.get('API_Source', 'Bilinmiyor').iloc[0]
-    weather_df = weather_df.drop(columns=['API_Source'], errors='ignore')
+    big_df = pd.concat(all_data)
+    big_df.sort_index(inplace=True)
+    big_df.dropna(inplace=True)
 
-    # 2. OPSD ve Spot Price
-    opsd_df = get_opsd_data()
-    spot_df = get_spot_price()
-    
-    # Merge dataframes
-    df_list = [weather_df]
-    if not opsd_df.empty: df_list.append(opsd_df)
-    if not spot_df.empty: df_list.append(spot_df)
-    
-    merged_df = pd.concat(df_list, axis=1).sort_index()
-    
-    # Eksik veriler için forward fill
-    merged_df.fillna(method='ffill', inplace=True)
-    
-    # 3. Basit stacking tahmini (örnek)
-    # Final_Stacking_Prediction = Target_Actual * 0.5 + WindGen etkisi + hava etkisi
-    if 'Target_Actual' not in merged_df.columns:
-        merged_df['Target_Actual'] = np.nan
-    if 'WindGen_MW' not in merged_df.columns:
-        merged_df['WindGen_MW'] = np.nan
-    merged_df['Final_Stacking_Prediction'] = (
-        merged_df.get('Target_Actual',0)*0.5 +
-        merged_df.get('WindGen_MW',0)*0.01 +
-        merged_df['Actual_Temp_C']*2
+    return big_df
+
+
+# -------- STAKING MODEL EĞİTİMİ --------
+def train_stacking_model(df):
+    df = df.copy()
+    df["Hour"] = df.index.hour
+    df["Day"]  = df.index.day
+    df["Month"] = df.index.month
+
+    features = ["Actual_Temp_C", "Actual_WindSpeed", "Hour", "Day", "Month"]
+    target = "SpotPrice_EUR"
+
+    X = df[features]
+    y = df[target]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.2)
+
+    model_rf = RandomForestRegressor(n_estimators=100)
+    model_rf.fit(X_train, y_train)
+
+    model_xgb = XGBRegressor(
+        n_estimators=200,
+        learning_rate=0.1,
+        max_depth=4,
+        subsample=0.9,
+        colsample_bytree=0.9
     )
+    model_xgb.fit(X_train, y_train)
 
-    # API kaynağını ekle
-    merged_df['API_Source'] = api_source
-    return merged_df
+    df_stack = pd.DataFrame({
+        "RF": model_rf.predict(X),
+        "XGB": model_xgb.predict(X)
+    }, index=df.index)
+
+    meta = LinearRegression()
+    meta.fit(df_stack, y)
+
+    return model_rf, model_xgb, meta
+
+
+# -------- TAHMİN FONKSİYONU --------
+def run_energy_forecast(city_name: str):
+    # 1) dataset yoksa oluştur
+    df = build_batch_dataset()
+    if df.empty:
+        return pd.DataFrame()
+
+    # 2) stacking modeli eğit
+    rf, xgb, meta = train_stacking_model(df)
+
+    # 3) seçilen şehir için veri çek
+    city = next(c for c in CITIES if c["name"] == city_name)
+    wdf = get_weather(city["lat"], city["lon"])
+    if wdf.empty:
+        return pd.DataFrame()
+
+    wdf["Hour"] = wdf.index.hour
+    wdf["Day"]  = wdf.index.day
+    wdf["Month"] = wdf.index.month
+
+    feats = ["Actual_Temp_C", "Actual_WindSpeed", "Hour", "Day", "Month"]
+    wdf = wdf.dropna(subset=feats)
+
+    # stacking tahmini
+    rf_pred = rf.predict(wdf[feats])
+    xgb_pred = xgb.predict(wdf[feats])
+    stack_input = pd.DataFrame({"RF": rf_pred, "XGB": xgb_pred}, index=wdf.index)
+    final_pred = meta.predict(stack_input)
+
+    wdf["Final_Stacking_Prediction"] = final_pred
+    wdf["API_Source"] = "NESO + OpenMeteo"
+
+    return wdf
